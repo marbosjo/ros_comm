@@ -358,7 +358,7 @@ class Loader(object):
         else:
             ros_config.add_param(Param(param_name, param_value), verbose=verbose)
         
-    def load_rosparam(self, context, ros_config, cmd, param, file_, text, verbose=True):
+    def load_rosparam(self, context, ros_config, cmd, param, file_, execute, text, verbose=True):
         """
         Load rosparam setting
         
@@ -370,7 +370,9 @@ class Loader(object):
         @type  cmd: str
         @param file_: filename for rosparam to use or None
         @type  file_: str
-        @param text: text for rosparam to load. Ignored if file_ is set.
+        @param execute: command to execute for rosparam load or None. Ignored if file_ is set
+        @type  execute: str
+        @param text: text for rosparam to load. Ignored if file_ or execute are set.
         @type  text: str
         @raise ValueError: if parameters cannot be processed into valid rosparam setting
         """
@@ -381,7 +383,12 @@ class Loader(object):
                 raise ValueError("file does not exist [%s]"%file_)
             if cmd == 'delete':
                 raise ValueError("'file' attribute is invalid with 'delete' command.")
-
+        elif execute is not None:
+            if cmd == 'delete':
+                raise ValueError("'execute' attribute is invalid with 'delete' command.")
+            if cmd == 'dump':
+                raise ValueError("'execute' attribute is invalid with 'dump' command.")
+ 
         full_param = ns_join(context.ns, param) if param else context.ns
 
         if cmd == 'dump':
@@ -393,6 +400,28 @@ class Loader(object):
             if file_:
                 with open(file_, 'r') as f:
                     text = f.read()
+            elif execute:
+                try:
+                    if type(execute) == unicode:
+                        execute = execute.encode('utf-8') #attempt to force to string for shlex/subprocess
+                except NameError:
+                    pass
+                if verbose:
+                    print("... executing command param [%s]" % execute)
+                import subprocess, shlex #shlex rocks
+                try:
+                    p = subprocess.Popen(shlex.split(execute), stdout=subprocess.PIPE)
+                    text = p.communicate()[0]
+                    if not isinstance(text, str):
+                        text = text.decode('utf-8')
+                    if p.returncode != 0:
+                        raise ValueError("Cannot load command parameter [%s]: command [%s] returned with code [%s]"%(name, execute, p.returncode))
+                except OSError as e:
+                    if e.errno == 2:
+                        raise ValueError("Cannot load command parameter [%s]: no such command [%s]"%(name, execute))
+                    raise
+                if text is None:
+                    raise ValueError("parameter: unable to get output of command [%s]"%execute)
                     
             # parse YAML text
             # - lazy import
@@ -468,7 +497,7 @@ class Loader(object):
             return convert_value(value.strip(), ptype)
         elif textfile is not None:
             with open(textfile, 'r') as f:
-                return f.read()
+                return convert_value(f.read(), ptype)
         elif binfile is not None:
             try:
                 from xmlrpc.client import Binary
@@ -498,7 +527,7 @@ class Loader(object):
                 raise
             if c_value is None:
                 raise ValueError("parameter: unable to get output of command [%s]"%command)
-            return c_value
+            return convert_value(c_value, ptype)
         else: #_param_tag prevalidates, so this should not be reachable
             raise ValueError("unable to determine parameter value")
 
